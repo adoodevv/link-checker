@@ -1,0 +1,11 @@
+# built binary
+/linkcheck
+
+# test and coverage artifacts
+*.out
+*.test
+
+# editor
+.vscode/
+.idea/
+.DS_Store
