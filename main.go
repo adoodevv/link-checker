@@ -6,8 +6,8 @@ import (
 	"os"
 	"time"
 
+	"github.com/adoodevv/link-checker/internal/extract"
 	"github.com/adoodevv/link-checker/internal/fetch"
-	"github.com/adoodevv/link-checker/internal/urlx"
 )
 
 func main() {
@@ -18,12 +18,6 @@ func main() {
 
 	seed := os.Args[1]
 
-	id, err := urlx.Identity(seed)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "bad seed URL: %v\n", err)
-		os.Exit(2)
-	}
-
 	client := fetch.New(10 * time.Second)
 
 	res, err := client.Get(context.Background(), seed)
@@ -32,10 +26,30 @@ func main() {
 		os.Exit(1)
 	}
 
-	fmt.Printf("fetched:  %s\n", res.URL)
-	fmt.Printf("identity: %s\n", id)
-	fmt.Printf("status:   %d\n", res.StatusCode)
-	fmt.Printf("type:     %s\n", res.ContentType)
-	fmt.Printf("html:     %t\n", res.IsHTML)
-	fmt.Printf("bytes:    %d\n", len(res.Body))
+	if !res.IsHTML {
+		fmt.Printf("%s → %d (%s, not HTML)\n", res.URL, res.StatusCode, res.ContentType)
+		return
+	}
+
+	parsed, err := extract.Parse(res.URL, res.Body)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "parse failed: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("fetched: %s → %d\n", res.URL, res.StatusCode)
+	fmt.Printf("base:    %s\n\n", parsed.Base)
+
+	fmt.Printf("links (%d):\n", len(parsed.Links))
+	for _, l := range parsed.Links {
+		fmt.Printf("  %s\n", l.Resolved)
+		if l.Identity != l.Resolved {
+			fmt.Printf("      identity: %s\n", l.Identity)
+		}
+	}
+
+	fmt.Printf("\nskipped (%d):\n", len(parsed.Skipped))
+	for _, s := range parsed.Skipped {
+		fmt.Printf("  %s  (%s)\n", s.Raw, s.Reason)
+	}
 }
