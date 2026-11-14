@@ -2,11 +2,14 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
-	"github.com/adoodevv/link-checker/internal/extract"
+	"github.com/adoodevv/link-checker/internal/crawl"
 	"github.com/adoodevv/link-checker/internal/fetch"
 )
 
@@ -20,36 +23,50 @@ func main() {
 
 	client := fetch.New(10 * time.Second)
 
-	res, err := client.Get(context.Background(), seed)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "fetch failed: %v\n", err)
+	// A context that is cancelled when the user presses Ctrl-C.
+	// Before, we used context.Background(), which can never be cancelled.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	results, err := crawl.Run(ctx, client, seed, 8)
+
+	// Was the error just "the user pressed Ctrl-C"?
+	interrupted := errors.Is(err, context.Canceled)
+
+	// Any other error is a real failure.
+	if err != nil && !interrupted {
+		fmt.Fprintf(os.Stderr, "crawl error: %v\n", err)
 		os.Exit(1)
 	}
 
-	if !res.IsHTML {
-		fmt.Printf("%s → %d (%s, not HTML)\n", res.URL, res.StatusCode, res.ContentType)
-		return
-	}
+	// Print results. If interrupted, these are whatever was checked before Ctrl-C.
+	var internal, external, broken int
+	for _, r := range results {
+		kind := "ext"
+		if r.Internal {
+			kind = "int"
+			internal++
+		} else {
+			external++
+		}
 
-	parsed, err := extract.Parse(res.URL, res.Body)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "parse failed: %v\n", err)
-		os.Exit(1)
-	}
+		status := fmt.Sprintf("%d", r.StatusCode)
+		if r.Err != nil {
+			status = "ERR"
+			broken++
+		} else if r.StatusCode >= 400 {
+			broken++
+		}
 
-	fmt.Printf("fetched: %s → %d\n", res.URL, res.StatusCode)
-	fmt.Printf("base:    %s\n\n", parsed.Base)
-
-	fmt.Printf("links (%d):\n", len(parsed.Links))
-	for _, l := range parsed.Links {
-		fmt.Printf("  %s\n", l.Resolved)
-		if l.Identity != l.Resolved {
-			fmt.Printf("      identity: %s\n", l.Identity)
+		fmt.Printf("  %-3s %-4s %s\n", kind, status, r.URL)
+		if r.Err != nil {
+			fmt.Printf("           %v\n", r.Err)
 		}
 	}
+	fmt.Printf("\n%d internal, %d external, %d broken\n", internal, external, broken)
 
-	fmt.Printf("\nskipped (%d):\n", len(parsed.Skipped))
-	for _, s := range parsed.Skipped {
-		fmt.Printf("  %s  (%s)\n", s.Raw, s.Reason)
+	if interrupted {
+		fmt.Fprintln(os.Stderr, "interrupted: results are partial")
+		os.Exit(130)
 	}
 }
