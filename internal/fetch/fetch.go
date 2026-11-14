@@ -50,7 +50,7 @@ func (c *Client) Get(ctx context.Context, rawURL string) (*Result, error) {
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("get %q: %w", rawURL, err)
+		return nil, err // *url.Error already names the method and URL
 	}
 	defer resp.Body.Close()
 
